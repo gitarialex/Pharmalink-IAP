@@ -1,3 +1,5 @@
+Team 3 API needs statement.
+
 Meeting with team 2:
 Team 3 needs to GET patient records in order to identify the medicines required by patients, match those medicines with pharmacies that have the required stock in or near the patient's location, and obtain the appropriate patient contact information for communicating medicine availability and pickup details.
 
