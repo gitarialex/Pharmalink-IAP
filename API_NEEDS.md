@@ -10,7 +10,7 @@ Team 3 needs to GET patient location information in order to identify pharmacies
 Team 3 needs to GET general medicine-use or procedure information in order to determine the relevant medicine requirements and provide the information needed by pharmacies to prepare or stock the required medicines.
 
 Meeting with team 4:
-Team 4 needs to GET pharmacy location records in order to match a user's selected Thriftly market with nearby pharmacies and display the pharmacies that can provide the required medicine.
+Team 4 needs to GET pharmacy location records in order to match a user's selected Thriftly market with nearby pharmacies and display the pharmacies that can be used as pickup points.
 
 Team 4 needs to GET pharmacy and inventory records from PharmaLink in order to display pharmacies, available medicines, stock quantities, prices, and estimated pickup information for users searching for health services near their selected Thriftly market location.
 
