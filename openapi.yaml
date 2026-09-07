@@ -1,0 +1,167 @@
+openapi: 3.0.0
+info:
+  version: '1.0.0'
+  title: PharmaLink API
+  description: API for accessing pharmacy locations, inventory, and reservations for buyer-reseller meet-up bookings.
+servers:
+  - url: https://api.example.com/api
+paths:
+  /pharmacies:
+    get:
+      summary: Get pharmacy names and location/distance/ETA data
+      description: >
+        Returns pharmacy names and location/distance/ETA data.
+        Supports filtering to return only verified pharmacies as trusted meet-up points.
+      parameters:
+        - name: verified
+          in: query
+          description: Filter to return only verified pharmacies
+          required: false
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: A list of pharmacies with location and verification status
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Pharmacy'
+        '500':
+          description: Server error
+  /inventory:
+    get:
+      summary: Get medicines, quantities, and prices in stock at a specific pharmacy
+      parameters:
+        - name: pharmacy_id
+          in: query
+          description: ID of the pharmacy to get inventory for
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Inventory details for the specified pharmacy
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/InventoryItem'
+        '400':
+          description: Missing or invalid pharmacy_id
+        '500':
+          description: Server error
+  /stock/search:
+    get:
+      summary: Search pharmacies near an area that stock a specific medicine
+      parameters:
+        - name: medicine
+          in: query
+          description: Name of the medicine to search for
+          required: true
+          schema:
+            type: string
+        - name: location
+          in: query
+          description: Area to search near
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Pharmacies stocking the specified medicine near the given location
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PharmacyStockSearchResult'
+        '400':
+          description: Missing or invalid query parameters
+        '500':
+          description: Server error
+  /reservations:
+    post:
+      summary: Create a reservation with a pickup window and confirmation code
+      description: >
+        Create a reservation to reserve a specific pharmacy location and time window as the confirmed meet-up point for a buyer-reseller exchange.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReservationRequest'
+      responses:
+        '201':
+          description: Reservation created successfully with confirmation code
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReservationResponse'
+        '400':
+          description: Invalid input
+        '500':
+          description: Server error
+components:
+  schemas:
+    Pharmacy:
+      type: object
+      properties:
+        name:
+          type: string
+        location:
+          type: string
+        distance:
+          type: number
+          format: float
+        eta:
+          type: string
+        verified:
+          type: boolean
+    InventoryItem:
+      type: object
+      properties:
+        medicine:
+          type: string
+        quantity:
+          type: integer
+        price:
+          type: number
+          format: float
+    PharmacyStockSearchResult:
+      type: object
+      properties:
+        pharmacy_id:
+          type: string
+        name:
+          type: string
+        location:
+          type: string
+        distance:
+          type: number
+          format: float
+    ReservationRequest:
+      type: object
+      required:
+        - pharmacy_id
+        - pickup_window_start
+        - pickup_window_end
+      properties:
+        pharmacy_id:
+          type: string
+          description: ID of the pharmacy for the reservation
+        pickup_window_start:
+          type: string
+          format: date-time
+          description: Start time of the pickup window
+        pickup_window_end:
+          type: string
+          format: date-time
+          description: End time of the pickup window
+    ReservationResponse:
+      type: object
+      properties:
+        confirmation_code:
+          type: string
