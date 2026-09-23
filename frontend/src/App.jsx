@@ -9,17 +9,37 @@ import {
   searchStock,
   updateInventoryItem
 } from "./api.js";
-import { demoPayments, demoPharmacies } from "./demoData.js";
+
 import MapView from "./MapView.jsx";
 
-const AREAS = ["Nairobi CBD", "Westlands", "Eastleigh", "Kisumu", "Mombasa"];
-const DEMO_PHARMACY_PASSWORD = "demo1234";
+const AREAS = [
+  "Nairobi CBD",
+  "Westlands",
+  "Eastleigh",
+  "Kisumu",
+  "Mombasa"
+];
 
 const pageText = {
-  search: ["Find medicine in stock near you", "Search by drug and location, compare nearby pharmacies, and reserve stock to pick up and pay in person."],
-  dashboard: ["Manage pharmacy stock", "Keep inventory current so patients stop travelling to pharmacies that are already out of stock."],
-  payments: ["Handle pharmacy billing", "Patients never pay through PharmaLink. Pharmacy subscriptions and sponsored listings are the only charges here."],
-  privacy: ["Privacy policy", "How PharmaLink collects, uses, and protects information for patients and pharmacies."]
+  search: [
+    "Find medicine in stock near you",
+    "Search by drug and location, compare nearby pharmacies, and reserve stock to pick up and pay in person."
+  ],
+
+  dashboard: [
+    "Manage pharmacy stock",
+    "Keep inventory current so patients stop travelling to pharmacies that are already out of stock."
+  ],
+
+  payments: [
+    "Handle pharmacy billing",
+    "Patients never pay through PharmaLink. Pharmacy subscriptions and sponsored listings are the only charges here."
+  ],
+
+  privacy: [
+    "Privacy policy",
+    "How PharmaLink collects, uses, and protects information for patients and pharmacies."
+  ]
 };
 
 function stockLabel(quantity) {
@@ -36,40 +56,102 @@ function stockClass(quantity) {
 
 export default function App() {
   const [section, setSection] = useState("search");
+
+  // Search
   const [medicine, setMedicine] = useState("Amoxicillin");
   const [area, setArea] = useState("Nairobi CBD");
-  const [results, setResults] = useState(demoPharmacies.filter((item) => item.medicine === "Amoxicillin" || item.area === "Nairobi CBD"));
+  const [results, setResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+
+  // Authentication
   const [activePharmacy, setActivePharmacy] = useState(null);
   const [authMode, setAuthMode] = useState("login");
-  const [authForm, setAuthForm] = useState({ name: "", area: "Nairobi CBD", password: "" });
+
+  const [authForm, setAuthForm] = useState({
+    name: "",
+    area: "Nairobi CBD",
+    password: ""
+  });
+
   const [authError, setAuthError] = useState("");
   const [authSubmitting, setAuthSubmitting] = useState(false);
+
+  // Inventory
   const [inventory, setInventory] = useState([]);
+  const [inventoryLoading, setInventoryLoading] = useState(false);
+
   const [editingId, setEditingId] = useState(null);
-  const [editDraft, setEditDraft] = useState({ quantity: "", price: "", status: "In stock" });
-  const [payments, setPayments] = useState(demoPayments);
-  const [selectedPharmacy, setSelectedPharmacy] = useState("");
+
+  const [editDraft, setEditDraft] = useState({
+    quantity: "",
+    price: "",
+    status: "In stock"
+  });
+
+  // Payments
+  const [payments, setPayments] = useState([]);
+
+  // Reservations
+  const [selectedPharmacy, setSelectedPharmacy] = useState(null);
   const [patientInitials, setPatientInitials] = useState("");
-  const [pickupWindow, setPickupWindow] = useState("Today, 2:00 PM - 4:00 PM");
+
+  const [pickupWindow, setPickupWindow] = useState(
+    "Today, 2:00 PM - 4:00 PM"
+  );
+
+  // Notifications
   const [toast, setToast] = useState("");
 
-  const availableMatches = useMemo(() => results.filter((item) => item.quantity > 0).length, [results]);
+  /*
+  ============================================================
+  SEARCH STATISTICS
+  ============================================================
+  */
+
+  const availableMatches = useMemo(() => {
+    return results.filter((item) => Number(item.quantity) > 0).length;
+  }, [results]);
 
   const lowestPrice = useMemo(() => {
-    const inStock = results.filter((item) => item.quantity > 0);
+    const inStock = results.filter(
+      (item) => Number(item.quantity) > 0
+    );
+
     if (inStock.length === 0) return null;
-    return Math.min(...inStock.map((item) => item.price));
+
+    return Math.min(
+      ...inStock.map((item) => Number(item.price))
+    );
   }, [results]);
 
   const fastestEta = useMemo(() => {
-    const inStock = results.filter((item) => item.quantity > 0 && item.eta);
+    const inStock = results.filter(
+      (item) =>
+        Number(item.quantity) > 0 &&
+        item.eta
+    );
+
     if (inStock.length === 0) return null;
+
     const minutes = inStock
-      .map((item) => parseInt(String(item.eta).match(/\d+/)?.[0], 10))
-      .filter((n) => !Number.isNaN(n));
+      .map((item) =>
+        parseInt(
+          String(item.eta).match(/\d+/)?.[0],
+          10
+        )
+      )
+      .filter((number) => !Number.isNaN(number));
+
     if (minutes.length === 0) return null;
+
     return Math.min(...minutes);
   }, [results]);
+
+  /*
+  ============================================================
+  LOAD INVENTORY FROM MYSQL
+  ============================================================
+  */
 
   useEffect(() => {
     if (!activePharmacy) {
@@ -77,135 +159,266 @@ export default function App() {
       return;
     }
 
-    getInventory(activePharmacy.id)
-      .then(setInventory)
-      .catch(() => {
-        const fallback = demoPharmacies
-          .filter((item) => item.id === activePharmacy.id)
-          .map((item) => ({
-            id: item.id,
-            pharmacy_id: item.id,
-            medicine: item.medicine,
-            quantity: item.quantity,
-            price: item.price,
-            status: stockLabel(item.quantity),
-            updated_at: "Demo data"
-          }));
-        setInventory(fallback);
-      });
+    let cancelled = false;
+
+    async function loadInventory() {
+      setInventoryLoading(true);
+
+      try {
+        const data = await getInventory(activePharmacy.id);
+
+        if (!cancelled) {
+          setInventory(data);
+        }
+      } catch (error) {
+        console.error("Failed to load inventory:", error);
+
+        if (!cancelled) {
+          setInventory([]);
+          setToast("Could not load inventory from the database.");
+        }
+      } finally {
+        if (!cancelled) {
+          setInventoryLoading(false);
+        }
+      }
+    }
+
+    loadInventory();
+
+    return () => {
+      cancelled = true;
+    };
   }, [activePharmacy]);
+
+  /*
+  ============================================================
+  REMOVE TOAST AFTER 2.8 SECONDS
+  ============================================================
+  */
 
   useEffect(() => {
     if (!toast) return undefined;
-    const timer = window.setTimeout(() => setToast(""), 2800);
+
+    const timer = window.setTimeout(() => {
+      setToast("");
+    }, 2800);
+
     return () => window.clearTimeout(timer);
   }, [toast]);
 
+  /*
+  ============================================================
+  SEARCH DATABASE
+  ============================================================
+  */
+
   async function handleSearch(event) {
     event.preventDefault();
-    try {
-      const apiResults = await searchStock(medicine, area);
-      setResults(apiResults);
-      setToast(`Showing live stock for ${medicine}.`);
-    } catch {
-      const fallback = demoPharmacies
-        .filter((item) => item.medicine.toLowerCase().includes(medicine.toLowerCase()) || item.area === area)
-        .sort((a, b) => b.quantity - a.quantity);
-      setResults(fallback);
-      setToast(`Showing demo stock for ${medicine}. Start the backend for live MySQL data.`);
-    }
-  }
 
-  async function handleAuthSubmit(event) {
-    event.preventDefault();
-    setAuthError("");
-    setAuthSubmitting(true);
-
-    const payload = { name: authForm.name.trim(), area: authForm.area, password: authForm.password };
-
-    try {
-      const pharmacy =
-        authMode === "login" ? await loginPharmacy(payload) : await registerPharmacy(payload);
-      setActivePharmacy(pharmacy);
-      setToast(authMode === "login" ? `Logged in as ${pharmacy.name}.` : `${pharmacy.name} registered.`);
-      setAuthForm({ name: "", area: "Nairobi CBD", password: "" });
-    } catch (error) {
-      if (!error.isNetworkError) {
-        setAuthError(error.message);
-        setAuthSubmitting(false);
-        return;
-      }
-
-      if (authMode === "login") {
-        const match = demoPharmacies.find(
-          (item) => item.name.toLowerCase() === payload.name.toLowerCase()
-        );
-        if (match && payload.password === DEMO_PHARMACY_PASSWORD) {
-          setActivePharmacy({ id: match.id, name: match.name, area: match.area, verified: match.verified });
-          setToast(`Logged in as ${match.name} (offline demo mode).`);
-          setAuthForm({ name: "", area: "Nairobi CBD", password: "" });
-        } else {
-          setAuthError("Backend unreachable. In offline demo mode, use a seeded pharmacy name with password demo1234.");
-        }
-      } else {
-        const demoPharmacy = { id: Date.now(), name: payload.name, area: payload.area, verified: false };
-        setActivePharmacy(demoPharmacy);
-        setToast(`${demoPharmacy.name} registered (offline demo mode, not saved).`);
-        setAuthForm({ name: "", area: "Nairobi CBD", password: "" });
-      }
-    }
-
-    setAuthSubmitting(false);
-  }
-
-  async function handleReserve() {
-    if (!selectedPharmacy) {
-      setToast("Choose a pharmacy before reserving stock.");
+    if (!medicine.trim()) {
+      setToast("Enter a medicine name.");
       return;
     }
 
-    const code = `PL-${Math.floor(1000 + Math.random() * 9000)}`;
+    setSearching(true);
+    setSelectedPharmacy(null);
+
     try {
-      await createReservation({
-        pharmacy_id: selectedPharmacy.id,
-        medicine: selectedPharmacy.medicine,
-        patient_initials: patientInitials || "ANON",
-        pickup_window: pickupWindow,
-        reservation_code: code
-      });
-    } catch {
-      
+      const apiResults = await searchStock(
+        medicine.trim(),
+        area
+      );
+
+      setResults(apiResults);
+
+      if (apiResults.length === 0) {
+        setToast(
+          `No live stock found for ${medicine} in ${area}.`
+        );
+      } else {
+        setToast(
+          `Found ${apiResults.length} live stock result(s).`
+        );
+      }
+    } catch (error) {
+      console.error("Search failed:", error);
+
+      setResults([]);
+
+      setToast(
+        error.message ||
+          "Could not search stock. Check that the backend is running."
+      );
+    } finally {
+      setSearching(false);
     }
-    setToast(`Reservation ${code} created for ${(patientInitials || "ANON").toUpperCase()}.`);
   }
+
+  /*
+  ============================================================
+  LOGIN / REGISTER
+  ============================================================
+  */
+
+  async function handleAuthSubmit(event) {
+    event.preventDefault();
+
+    setAuthError("");
+    setAuthSubmitting(true);
+
+    const payload = {
+      name: authForm.name.trim(),
+      area: authForm.area,
+      password: authForm.password
+    };
+
+    try {
+      let pharmacy;
+
+      if (authMode === "login") {
+        pharmacy = await loginPharmacy({
+          name: payload.name,
+          password: payload.password
+        });
+      } else {
+        pharmacy = await registerPharmacy(payload);
+      }
+
+      setActivePharmacy(pharmacy);
+
+      setToast(
+        authMode === "login"
+          ? `Logged in as ${pharmacy.name}.`
+          : `${pharmacy.name} registered successfully.`
+      );
+
+      setAuthForm({
+        name: "",
+        area: "Nairobi CBD",
+        password: ""
+      });
+    } catch (error) {
+      console.error("Authentication failed:", error);
+
+      setAuthError(
+        error.message ||
+          "Unable to communicate with the server."
+      );
+    } finally {
+      setAuthSubmitting(false);
+    }
+  }
+
+  /*
+  ============================================================
+  LOGOUT / SWITCH PHARMACY
+  ============================================================
+  */
+
+  function handleLogout() {
+    setActivePharmacy(null);
+    setInventory([]);
+    setEditingId(null);
+    setAuthError("");
+
+    setAuthForm({
+      name: "",
+      area: "Nairobi CBD",
+      password: ""
+    });
+
+    setToast("Logged out.");
+  }
+
+  /*
+  ============================================================
+  ADD INVENTORY
+  ============================================================
+  */
 
   async function handleAddInventory(event) {
     event.preventDefault();
-    if (!activePharmacy) return;
 
-    const form = new FormData(event.currentTarget);
+    if (!activePharmacy) {
+      setToast("Please log in first.");
+      return;
+    }
+
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+
     const item = {
-      medicine: form.get("medicine"),
+      medicine: String(form.get("medicine") || "").trim(),
       quantity: Number(form.get("quantity")),
       price: Number(form.get("price")),
       status: form.get("status"),
       pharmacy_id: activePharmacy.id
     };
 
-    try {
-      const saved = await addInventoryItem(item);
-      setInventory((current) => [saved, ...current]);
-    } catch {
-      setInventory((current) => [{ id: Date.now(), ...item, updated_at: "Just now" }, ...current]);
+    if (!item.medicine) {
+      setToast("Medicine name is required.");
+      return;
     }
 
-    event.currentTarget.reset();
-    setToast("Inventory item added.");
+    if (
+      Number.isNaN(item.quantity) ||
+      item.quantity < 0
+    ) {
+      setToast("Enter a valid quantity.");
+      return;
+    }
+
+    if (
+      Number.isNaN(item.price) ||
+      item.price < 0
+    ) {
+      setToast("Enter a valid price.");
+      return;
+    }
+
+    try {
+      const saved = await addInventoryItem(item);
+
+      setInventory((current) => [
+        saved,
+        ...current
+      ]);
+
+      formElement.reset();
+
+      setToast(
+        `${saved.medicine || item.medicine} saved to the database.`
+      );
+    } catch (error) {
+      console.error(
+        "Failed to add inventory:",
+        error
+      );
+
+      setToast(
+        error.message ||
+          "Could not save inventory to the database."
+      );
+    }
   }
+
+  /*
+  ============================================================
+  EDIT INVENTORY
+  ============================================================
+  */
 
   function startEditingItem(item) {
     setEditingId(item.id);
-    setEditDraft({ quantity: item.quantity, price: item.price, status: item.status || stockLabel(item.quantity) });
+
+    setEditDraft({
+      quantity: item.quantity,
+      price: item.price,
+      status:
+        item.status ||
+        stockLabel(Number(item.quantity))
+    });
   }
 
   function cancelEditingItem() {
@@ -213,30 +426,123 @@ export default function App() {
   }
 
   async function saveEditingItem(id) {
+    if (!activePharmacy) {
+      setToast("Please log in first.");
+      return;
+    }
+
     const payload = {
       quantity: Number(editDraft.quantity),
       price: Number(editDraft.price),
       status: editDraft.status,
-      pharmacy_id: activePharmacy?.id
+      pharmacy_id: activePharmacy.id
+    };
+
+    if (
+      Number.isNaN(payload.quantity) ||
+      payload.quantity < 0
+    ) {
+      setToast("Enter a valid quantity.");
+      return;
+    }
+
+    if (
+      Number.isNaN(payload.price) ||
+      payload.price < 0
+    ) {
+      setToast("Enter a valid price.");
+      return;
+    }
+
+    try {
+      const saved = await updateInventoryItem(
+        id,
+        payload
+      );
+
+      setInventory((current) =>
+        current.map((row) =>
+          row.id === id ? saved : row
+        )
+      );
+
+      setEditingId(null);
+
+      setToast("Stock updated in the database.");
+    } catch (error) {
+      console.error(
+        "Failed to update inventory:",
+        error
+      );
+
+      setToast(
+        error.message ||
+          "Could not update stock."
+      );
+    }
+  }
+
+  /*
+  ============================================================
+  RESERVATIONS
+  ============================================================
+  */
+
+  async function handleReserve() {
+    if (!selectedPharmacy) {
+      setToast(
+        "Choose a pharmacy before reserving stock."
+      );
+      return;
+    }
+
+    const code = `PL-${Math.floor(
+      1000 + Math.random() * 9000
+    )}`;
+
+    const reservation = {
+      pharmacy_id: selectedPharmacy.id,
+      medicine: selectedPharmacy.medicine,
+      patient_initials:
+        patientInitials.trim().toUpperCase() ||
+        "ANON",
+      pickup_window: pickupWindow,
+      reservation_code: code
     };
 
     try {
-      const saved = await updateInventoryItem(id, payload);
-      setInventory((current) => current.map((row) => (row.id === id ? saved : row)));
-    } catch {
-      setInventory((current) =>
-        current.map((row) => (row.id === id ? { ...row, ...payload, updated_at: "Just now" } : row))
+      const saved = await createReservation(
+        reservation
+      );
+
+      setToast(
+        `Reservation ${
+          saved.reservation_code || code
+        } created successfully.`
+      );
+
+      setPatientInitials("");
+    } catch (error) {
+      console.error(
+        "Reservation failed:",
+        error
+      );
+
+      setToast(
+        error.message ||
+          "Could not create reservation."
       );
     }
-
-    setEditingId(null);
-    setToast("Stock updated.");
   }
+
+  /*
+  ============================================================
+  PAYMENTS
+  ============================================================
+  */
 
   async function handlePayment(type, amount) {
     const payment = {
-      id: Date.now(),
-      time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       type,
       amount,
       status: "Confirmed"
@@ -244,73 +550,154 @@ export default function App() {
 
     try {
       const saved = await createPayment(payment);
-      setPayments((current) => [saved, ...current]);
-    } catch {
-      setPayments((current) => [payment, ...current]);
-    }
 
-    setToast(`${type} recorded.`);
+      setPayments((current) => [
+        saved,
+        ...current
+      ]);
+
+      setToast(`${type} recorded.`);
+    } catch (error) {
+      console.error(
+        "Payment could not be recorded:",
+        error
+      );
+
+      setToast(
+        error.message ||
+          "Could not record payment."
+      );
+    }
   }
+
+  /*
+  ============================================================
+  UI
+  ============================================================
+  */
 
   return (
     <div className="app-shell">
+
+      {/* SIDEBAR */}
+
       <aside className="sidebar">
+
         <div className="brand">
           <div className="brand-mark">+</div>
+
           <div>
             <h1>PharmaLink</h1>
             <span>Medicine stock finder</span>
           </div>
         </div>
 
-        <nav className="nav" aria-label="Main navigation">
+        <nav
+          className="nav"
+          aria-label="Main navigation"
+        >
           {[
             ["search", "Search"],
             ["dashboard", "Pharmacy"],
             ["payments", "Payments"],
             ["privacy", "Privacy"]
           ].map(([key, label]) => (
-            <button key={key} className={section === key ? "active" : ""} onClick={() => setSection(key)}>
+            <button
+              key={key}
+              className={
+                section === key ? "active" : ""
+              }
+              onClick={() => setSection(key)}
+            >
               {label}
             </button>
           ))}
         </nav>
 
         <div className="sidebar-note">
-          Search data is anonymized, reservations expire automatically, and pharmacies only see what they need to prepare the order.
+          Search data is anonymized,
+          reservations expire automatically,
+          and pharmacies only see what they
+          need to prepare the order.
         </div>
       </aside>
 
+      {/* MAIN CONTENT */}
+
       <main>
+
         <header className="topbar">
           <div>
             <h2>{pageText[section][0]}</h2>
             <p>{pageText[section][1]}</p>
           </div>
-          <span className="status-pill">Live pharmacy network</span>
+
+          <span className="status-pill">
+            Live pharmacy network
+          </span>
         </header>
+
+        {/* ==================================================
+            SEARCH PAGE
+        ================================================== */}
 
         {section === "search" && (
           <section>
+
             <div className="search-panel">
+
               <div className="search-copy">
-                <form className="search-form" onSubmit={handleSearch}>
+
+                <form
+                  className="search-form"
+                  onSubmit={handleSearch}
+                >
+
                   <label>
                     Medicine
-                    <input value={medicine} onChange={(event) => setMedicine(event.target.value)} list="drugList" />
+
+                    <input
+                      value={medicine}
+                      onChange={(event) =>
+                        setMedicine(
+                          event.target.value
+                        )
+                      }
+                      list="drugList"
+                      required
+                    />
                   </label>
+
                   <label>
                     Location
-                    <select value={area} onChange={(event) => setArea(event.target.value)}>
-                      <option>Nairobi CBD</option>
-                      <option>Westlands</option>
-                      <option>Eastleigh</option>
-                      <option>Kisumu</option>
-                      <option>Mombasa</option>
+
+                    <select
+                      value={area}
+                      onChange={(event) =>
+                        setArea(
+                          event.target.value
+                        )
+                      }
+                    >
+                      {AREAS.map((option) => (
+                        <option key={option}>
+                          {option}
+                        </option>
+                      ))}
                     </select>
                   </label>
-                  <button className="primary-btn" type="submit">Search stock</button>
+
+                  <button
+                    className="primary-btn"
+                    type="submit"
+                    disabled={searching}
+                  >
+                    {searching
+                      ? "Searching..."
+                      : "Search stock"}
+                  </button>
                 </form>
+
                 <datalist id="drugList">
                   <option value="Amoxicillin" />
                   <option value="Insulin glargine" />
@@ -318,351 +705,909 @@ export default function App() {
                   <option value="Metformin" />
                   <option value="Losartan" />
                 </datalist>
+
                 <div className="stats">
-                  <div className="stat"><strong>{availableMatches}</strong><span>stock matches</span></div>
-                  <div className="stat"><strong>{fastestEta !== null ? `${fastestEta} min` : "—"}</strong><span>fastest pickup</span></div>
-                  <div className="stat"><strong>{lowestPrice !== null ? `KSh ${lowestPrice}` : "—"}</strong><span>lowest price</span></div>
-                  <div className="stat"><strong>99%</strong><span>private searches</span></div>
+
+                  <div className="stat">
+                    <strong>
+                      {availableMatches}
+                    </strong>
+                    <span>stock matches</span>
+                  </div>
+
+                  <div className="stat">
+                    <strong>
+                      {fastestEta !== null
+                        ? `${fastestEta} min`
+                        : "—"}
+                    </strong>
+                    <span>fastest pickup</span>
+                  </div>
+
+                  <div className="stat">
+                    <strong>
+                      {lowestPrice !== null
+                        ? `KSh ${lowestPrice}`
+                        : "—"}
+                    </strong>
+                    <span>lowest price</span>
+                  </div>
+
+                  <div className="stat">
+                    <strong>99%</strong>
+                    <span>private searches</span>
+                  </div>
+
                 </div>
               </div>
+
               <div className="visual">
                 <div className="visual-device">
+
                   <MapView results={results} />
-                  <p className="tiny">Live pharmacy stock map with distance, price, and verified availability.</p>
+
+                  <p className="tiny">
+                    Live pharmacy stock map with
+                    distance, price, and verified
+                    availability.
+                  </p>
+
                 </div>
               </div>
             </div>
 
             <div className="content-grid">
+
               <div className="results">
+
                 {results.length === 0 ? (
+
                   <article className="result-card">
                     <div>
-                      <h3>No exact matches yet</h3>
-                      <p className="tiny">Try another location or medicine name.</p>
+                      <h3>No stock results</h3>
+
+                      <p className="tiny">
+                        Search for a medicine and
+                        location to see live MySQL
+                        inventory.
+                      </p>
                     </div>
                   </article>
-                ) : results.map((item) => (
-                  <article className="result-card" key={`${item.id}-${item.name}`}>
-                    <div>
-                      <h3>{item.name}</h3>
-                      <p className="tiny">{item.area} - {item.distance} away - Pickup in {item.eta}</p>
-                      <div className="result-meta">
-                        <span className={`tag ${stockClass(item.quantity)}`}>{stockLabel(item.quantity)}: {item.quantity}</span>
-                        <span className="tag blue">KSh {item.price}</span>
-                        <span className="tag">{item.verified ? "Verified pharmacy" : "Community report"}</span>
-                      </div>
-                      <div className="result-actions">
-                        <button className="secondary-btn" onClick={() => setSelectedPharmacy(item)}>Reserve</button>
-                        <button className="ghost-btn" onClick={() => setToast(`Call request prepared for ${item.name}.`)}>Call</button>
-                        <button
-                          className="ghost-btn"
-                          onClick={() => {
-                            if (item.latitude && item.longitude) {
-                              window.open(
-                                `https://www.openstreetmap.org/directions?to=${item.latitude}%2C${item.longitude}`,
-                                "_blank",
-                                "noopener,noreferrer"
-                              );
-                            } else {
-                              setToast(`No coordinates on file for ${item.name} yet.`);
+
+                ) : (
+
+                  results.map((item) => (
+
+                    <article
+                      className="result-card"
+                      key={`${item.id}-${item.medicine}`}
+                    >
+
+                      <div>
+
+                        <h3>{item.name}</h3>
+
+                        <p className="tiny">
+                          {item.area}
+                          {" - "}
+                          {item.distance}
+                          {" away - Pickup in "}
+                          {item.eta}
+                        </p>
+
+                        <div className="result-meta">
+
+                          <span
+                            className={`tag ${stockClass(
+                              Number(item.quantity)
+                            )}`}
+                          >
+                            {stockLabel(
+                              Number(item.quantity)
+                            )}
+                            : {item.quantity}
+                          </span>
+
+                          <span className="tag blue">
+                            KSh {item.price}
+                          </span>
+
+                          <span className="tag">
+                            {item.verified
+                              ? "Verified pharmacy"
+                              : "Not verified"}
+                          </span>
+
+                        </div>
+
+                        <div className="result-actions">
+
+                          <button
+                            className="secondary-btn"
+                            onClick={() =>
+                              setSelectedPharmacy(item)
                             }
-                          }}
-                        >
-                          Directions
-                        </button>
+                          >
+                            Reserve
+                          </button>
+
+                          <button
+                            className="ghost-btn"
+                            onClick={() =>
+                              setToast(
+                                `Call request prepared for ${item.name}.`
+                              )
+                            }
+                          >
+                            Call
+                          </button>
+
+                          <button
+                            className="ghost-btn"
+                            onClick={() => {
+
+                              if (
+                                item.latitude &&
+                                item.longitude
+                              ) {
+
+                                window.open(
+                                  `https://www.openstreetmap.org/directions?to=${item.latitude}%2C${item.longitude}`,
+                                  "_blank",
+                                  "noopener,noreferrer"
+                                );
+
+                              } else {
+
+                                setToast(
+                                  `No coordinates on file for ${item.name}.`
+                                );
+
+                              }
+                            }}
+                          >
+                            Directions
+                          </button>
+
+                        </div>
                       </div>
-                    </div>
-                    <strong>KSh {item.price}</strong>
-                  </article>
-                ))}
+
+                      <strong>
+                        KSh {item.price}
+                      </strong>
+
+                    </article>
+                  ))
+                )}
+
               </div>
 
+              {/* RESERVATION PANEL */}
+
               <aside className="side-panel">
+
                 <h3>Reserve medicine</h3>
+
                 <label>
                   Selected pharmacy
-                  <input value={selectedPharmacy?.name || "Choose a result"} readOnly />
+
+                  <input
+                    value={
+                      selectedPharmacy?.name ||
+                      "Choose a result"
+                    }
+                    readOnly
+                  />
                 </label>
+
                 <label>
                   Patient initials
-                  <input value={patientInitials} onChange={(event) => setPatientInitials(event.target.value)} maxLength="4" placeholder="e.g. MM" />
+
+                  <input
+                    value={patientInitials}
+                    onChange={(event) =>
+                      setPatientInitials(
+                        event.target.value
+                      )
+                    }
+                    maxLength="4"
+                    placeholder="e.g. MM"
+                  />
                 </label>
+
                 <label>
                   Pickup window
-                  <select value={pickupWindow} onChange={(event) => setPickupWindow(event.target.value)}>
-                    <option>Today, 2:00 PM - 4:00 PM</option>
-                    <option>Today, 4:00 PM - 6:00 PM</option>
-                    <option>Tomorrow morning</option>
+
+                  <select
+                    value={pickupWindow}
+                    onChange={(event) =>
+                      setPickupWindow(
+                        event.target.value
+                      )
+                    }
+                  >
+                    <option>
+                      Today, 2:00 PM - 4:00 PM
+                    </option>
+
+                    <option>
+                      Today, 4:00 PM - 6:00 PM
+                    </option>
+
+                    <option>
+                      Tomorrow morning
+                    </option>
                   </select>
                 </label>
-                <button className="primary-btn" onClick={handleReserve}>Reserve stock</button>
-                <p className="tiny">Only initials and reservation code are shared with the pharmacy.</p>
+
+                <button
+                  className="primary-btn"
+                  onClick={handleReserve}
+                >
+                  Reserve stock
+                </button>
+
+                <p className="tiny">
+                  Only initials and reservation
+                  code are shared with the pharmacy.
+                </p>
+
               </aside>
             </div>
+
           </section>
         )}
 
-        {section === "dashboard" && !activePharmacy && (
+        {/* ==================================================
+            LOGIN / REGISTER
+        ================================================== */}
+
+        {section === "dashboard" &&
+          !activePharmacy && (
+
           <section className="panel">
+
             <div className="toolbar">
-              <h3>{authMode === "login" ? "Pharmacy login" : "Register your pharmacy"}</h3>
+
+              <h3>
+                {authMode === "login"
+                  ? "Pharmacy login"
+                  : "Register your pharmacy"}
+              </h3>
+
               <div className="result-actions">
+
                 <button
-                  className={authMode === "login" ? "secondary-btn" : "ghost-btn"}
-                  onClick={() => { setAuthMode("login"); setAuthError(""); }}
+                  className={
+                    authMode === "login"
+                      ? "secondary-btn"
+                      : "ghost-btn"
+                  }
+                  onClick={() => {
+                    setAuthMode("login");
+                    setAuthError("");
+                  }}
                 >
                   Log in
                 </button>
+
                 <button
-                  className={authMode === "register" ? "secondary-btn" : "ghost-btn"}
-                  onClick={() => { setAuthMode("register"); setAuthError(""); }}
+                  className={
+                    authMode === "register"
+                      ? "secondary-btn"
+                      : "ghost-btn"
+                  }
+                  onClick={() => {
+                    setAuthMode("register");
+                    setAuthError("");
+                  }}
                 >
                   Register
                 </button>
+
               </div>
             </div>
 
-            <form className="auth-form" onSubmit={handleAuthSubmit}>
+            <form
+              className="auth-form"
+              onSubmit={handleAuthSubmit}
+            >
+
               <label>
                 Pharmacy name
+
                 <input
                   value={authForm.name}
-                  onChange={(event) => setAuthForm((form) => ({ ...form, name: event.target.value }))}
+                  onChange={(event) =>
+                    setAuthForm((form) => ({
+                      ...form,
+                      name: event.target.value
+                    }))
+                  }
                   placeholder="e.g. AfyaCare Pharmacy"
                   required
                 />
               </label>
 
               {authMode === "register" && (
+
                 <label>
                   Area
+
                   <select
                     value={authForm.area}
-                    onChange={(event) => setAuthForm((form) => ({ ...form, area: event.target.value }))}
+                    onChange={(event) =>
+                      setAuthForm((form) => ({
+                        ...form,
+                        area: event.target.value
+                      }))
+                    }
                   >
                     {AREAS.map((option) => (
-                      <option key={option}>{option}</option>
+                      <option key={option}>
+                        {option}
+                      </option>
                     ))}
                   </select>
                 </label>
+
               )}
 
               <label>
                 Password
+
                 <input
                   type="password"
                   value={authForm.password}
-                  onChange={(event) => setAuthForm((form) => ({ ...form, password: event.target.value }))}
-                  placeholder={authMode === "register" ? "At least 6 characters" : "Password"}
-                  minLength={authMode === "register" ? 6 : undefined}
+                  onChange={(event) =>
+                    setAuthForm((form) => ({
+                      ...form,
+                      password:
+                        event.target.value
+                    }))
+                  }
+                  placeholder={
+                    authMode === "register"
+                      ? "At least 6 characters"
+                      : "Password"
+                  }
+                  minLength={
+                    authMode === "register"
+                      ? 6
+                      : undefined
+                  }
                   required
                 />
               </label>
 
-              <button className="primary-btn" type="submit" disabled={authSubmitting}>
-                {authSubmitting ? "Please wait..." : authMode === "login" ? "Log in" : "Create account"}
+              <button
+                className="primary-btn"
+                type="submit"
+                disabled={authSubmitting}
+              >
+                {authSubmitting
+                  ? "Please wait..."
+                  : authMode === "login"
+                    ? "Log in"
+                    : "Create account"}
               </button>
+
             </form>
 
-            {authError && <p className="tiny" style={{ color: "var(--red)", marginTop: 10 }}>{authError}</p>}
-            <p className="tiny" style={{ marginTop: 14 }}>
-              Trying the demo without registering? Seeded pharmacies (AfyaCare Pharmacy, Westlands MedPoint, etc.)
-              all use the password <strong>demo1234</strong>.
-            </p>
-          </section>
-        )}
-
-        {section === "dashboard" && activePharmacy && (
-          <section className="panel">
-            <div className="toolbar">
-              <div>
-                <h3>Pharmacy inventory dashboard</h3>
-                <p className="tiny">Logged in as <strong>{activePharmacy.name}</strong> ({activePharmacy.area}). Update live stock and flag low inventory.</p>
-              </div>
-              <button
-                className="ghost-btn"
-                onClick={() => {
-                  setActivePharmacy(null);
-                  setEditingId(null);
-                  setAuthError("");
-                  setAuthForm({ name: "", area: "Nairobi CBD", password: "" });
+            {authError && (
+              <p
+                className="tiny"
+                style={{
+                  color: "var(--red)",
+                  marginTop: 10
                 }}
               >
-                Switch pharmacy
-              </button>
-            </div>
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr><th>Medicine</th><th>Stock</th><th>Price</th><th>Status</th><th>Last update</th><th></th></tr>
-                </thead>
-                <tbody>
-                  {inventory.length === 0 ? (
-                    <tr><td colSpan="6" className="tiny">No stock listed yet — add your first item below.</td></tr>
-                  ) : inventory.map((item) => (
-                    <tr key={item.id}>
-                      <td>{item.medicine}</td>
-                      {editingId === item.id ? (
-                        <>
-                          <td>
-                            <input
-                              type="number"
-                              min="0"
-                              value={editDraft.quantity}
-                              onChange={(event) => setEditDraft((draft) => ({ ...draft, quantity: event.target.value }))}
-                            />
-                          </td>
-                          <td>
-                            <input
-                              type="number"
-                              min="0"
-                              value={editDraft.price}
-                              onChange={(event) => setEditDraft((draft) => ({ ...draft, price: event.target.value }))}
-                            />
-                          </td>
-                          <td>
-                            <select
-                              value={editDraft.status}
-                              onChange={(event) => setEditDraft((draft) => ({ ...draft, status: event.target.value }))}
-                            >
-                              <option>In stock</option>
-                              <option>Low stock</option>
-                              <option>Out of stock</option>
-                            </select>
-                          </td>
-                          <td>{item.updated_at || "Just now"}</td>
-                          <td className="result-actions">
-                            <button className="secondary-btn" onClick={() => saveEditingItem(item.id)}>Save</button>
-                            <button className="ghost-btn" onClick={cancelEditingItem}>Cancel</button>
-                          </td>
-                        </>
-                      ) : (
-                        <>
-                          <td>{item.quantity}</td>
-                          <td>KSh {item.price}</td>
-                          <td><span className={`tag ${stockClass(item.quantity)}`}>{item.status || stockLabel(item.quantity)}</span></td>
-                          <td>{item.updated_at || "Just now"}</td>
-                          <td><button className="ghost-btn" onClick={() => startEditingItem(item)}>Edit</button></td>
-                        </>
-                      )}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <form className="inventory-form" onSubmit={handleAddInventory}>
-              <label>Medicine<input name="medicine" placeholder="Medicine name" required /></label>
-              <label>Quantity<input name="quantity" type="number" min="0" defaultValue="20" required /></label>
-              <label>Price<input name="price" type="number" min="0" defaultValue="250" required /></label>
-              <label>Status<select name="status"><option>In stock</option><option>Low stock</option><option>Out of stock</option></select></label>
-              <button className="primary-btn" type="submit">Add item</button>
-            </form>
+                {authError}
+              </p>
+            )}
+
           </section>
         )}
+
+        {/* ==================================================
+            PHARMACY INVENTORY
+        ================================================== */}
+
+        {section === "dashboard" &&
+          activePharmacy && (
+
+          <section className="panel">
+
+            <div className="toolbar">
+
+              <div>
+                <h3>
+                  Pharmacy inventory dashboard
+                </h3>
+
+                <p className="tiny">
+                  Logged in as{" "}
+                  <strong>
+                    {activePharmacy.name}
+                  </strong>{" "}
+                  ({activePharmacy.area}).
+                </p>
+              </div>
+
+              <button
+                className="ghost-btn"
+                onClick={handleLogout}
+              >
+                Log out
+              </button>
+
+            </div>
+
+            <div className="table-wrap">
+
+              <table>
+
+                <thead>
+                  <tr>
+                    <th>Medicine</th>
+                    <th>Stock</th>
+                    <th>Price</th>
+                    <th>Status</th>
+                    <th>Last update</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+
+                <tbody>
+
+                  {inventoryLoading ? (
+
+                    <tr>
+                      <td
+                        colSpan="6"
+                        className="tiny"
+                      >
+                        Loading inventory...
+                      </td>
+                    </tr>
+
+                  ) : inventory.length === 0 ? (
+
+                    <tr>
+                      <td
+                        colSpan="6"
+                        className="tiny"
+                      >
+                        No stock listed yet —
+                        add your first item below.
+                      </td>
+                    </tr>
+
+                  ) : (
+
+                    inventory.map((item) => (
+
+                      <tr key={item.id}>
+
+                        <td>
+                          {item.medicine}
+                        </td>
+
+                        {editingId === item.id ? (
+                          <>
+
+                            <td>
+                              <input
+                                type="number"
+                                min="0"
+                                value={
+                                  editDraft.quantity
+                                }
+                                onChange={(event) =>
+                                  setEditDraft(
+                                    (draft) => ({
+                                      ...draft,
+                                      quantity:
+                                        event.target
+                                          .value
+                                    })
+                                  )
+                                }
+                              />
+                            </td>
+
+                            <td>
+                              <input
+                                type="number"
+                                min="0"
+                                value={
+                                  editDraft.price
+                                }
+                                onChange={(event) =>
+                                  setEditDraft(
+                                    (draft) => ({
+                                      ...draft,
+                                      price:
+                                        event.target
+                                          .value
+                                    })
+                                  )
+                                }
+                              />
+                            </td>
+
+                            <td>
+                              <select
+                                value={
+                                  editDraft.status
+                                }
+                                onChange={(event) =>
+                                  setEditDraft(
+                                    (draft) => ({
+                                      ...draft,
+                                      status:
+                                        event.target
+                                          .value
+                                    })
+                                  )
+                                }
+                              >
+                                <option>
+                                  In stock
+                                </option>
+
+                                <option>
+                                  Low stock
+                                </option>
+
+                                <option>
+                                  Out of stock
+                                </option>
+                              </select>
+                            </td>
+
+                            <td>
+                              {item.updated_at ||
+                                "Just now"}
+                            </td>
+
+                            <td className="result-actions">
+
+                              <button
+                                className="secondary-btn"
+                                onClick={() =>
+                                  saveEditingItem(
+                                    item.id
+                                  )
+                                }
+                              >
+                                Save
+                              </button>
+
+                              <button
+                                className="ghost-btn"
+                                onClick={
+                                  cancelEditingItem
+                                }
+                              >
+                                Cancel
+                              </button>
+
+                            </td>
+
+                          </>
+                        ) : (
+                          <>
+
+                            <td>
+                              {item.quantity}
+                            </td>
+
+                            <td>
+                              KSh {item.price}
+                            </td>
+
+                            <td>
+
+                              <span
+                                className={`tag ${stockClass(
+                                  Number(
+                                    item.quantity
+                                  )
+                                )}`}
+                              >
+                                {item.status ||
+                                  stockLabel(
+                                    Number(
+                                      item.quantity
+                                    )
+                                  )}
+                              </span>
+
+                            </td>
+
+                            <td>
+                              {item.updated_at ||
+                                "Just now"}
+                            </td>
+
+                            <td>
+
+                              <button
+                                className="ghost-btn"
+                                onClick={() =>
+                                  startEditingItem(
+                                    item
+                                  )
+                                }
+                              >
+                                Edit
+                              </button>
+
+                            </td>
+
+                          </>
+                        )}
+
+                      </tr>
+                    ))
+                  )}
+
+                </tbody>
+
+              </table>
+
+            </div>
+
+            {/* ADD MEDICINE */}
+
+            <form
+              className="inventory-form"
+              onSubmit={handleAddInventory}
+            >
+
+              <label>
+                Medicine
+
+                <input
+                  name="medicine"
+                  placeholder="Medicine name"
+                  required
+                />
+              </label>
+
+              <label>
+                Quantity
+
+                <input
+                  name="quantity"
+                  type="number"
+                  min="0"
+                  defaultValue="20"
+                  required
+                />
+              </label>
+
+              <label>
+                Price
+
+                <input
+                  name="price"
+                  type="number"
+                  min="0"
+                  defaultValue="250"
+                  required
+                />
+              </label>
+
+              <label>
+                Status
+
+                <select name="status">
+                  <option>In stock</option>
+                  <option>Low stock</option>
+                  <option>Out of stock</option>
+                </select>
+              </label>
+
+              <button
+                className="primary-btn"
+                type="submit"
+              >
+                Add item
+              </button>
+
+            </form>
+
+          </section>
+        )}
+
+        {/* ==================================================
+            PAYMENTS
+        ================================================== */}
 
         {section === "payments" && (
+
           <section className="panel">
+
             <h3>Payments and revenue</h3>
+
             <div className="payment-grid">
-              <PaymentTile title="Pharmacy subscription" text="Pharmacies pay a monthly listing fee for dashboard access." button="Bill pharmacy" onClick={() => handlePayment("Monthly pharmacy subscription", 1500)} />
-              <PaymentTile title="Sponsored listing" text="Sponsored results are labelled and never override stock accuracy." button="Create invoice" onClick={() => handlePayment("Sponsored listing", 750)} />
+
+              <PaymentTile
+                title="Pharmacy subscription"
+                text="Pharmacies pay a monthly listing fee for dashboard access."
+                button="Bill pharmacy"
+                onClick={() =>
+                  handlePayment(
+                    "Monthly pharmacy subscription",
+                    1500
+                  )
+                }
+              />
+
+              <PaymentTile
+                title="Sponsored listing"
+                text="Sponsored results are labelled and never override stock accuracy."
+                button="Create invoice"
+                onClick={() =>
+                  handlePayment(
+                    "Sponsored listing",
+                    750
+                  )
+                }
+              />
+
             </div>
+
             <div className="table-wrap">
+
               <table>
-                <thead><tr><th>Time</th><th>Type</th><th>Amount</th><th>Status</th></tr></thead>
+
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Type</th>
+                    <th>Amount</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+
                 <tbody>
-                  {payments.map((payment) => (
-                    <tr key={payment.id}>
-                      <td>{payment.time}</td>
-                      <td>{payment.type}</td>
-                      <td>KSh {payment.amount}</td>
-                      <td><span className="tag good">{payment.status}</span></td>
+
+                  {payments.length === 0 ? (
+
+                    <tr>
+                      <td
+                        colSpan="4"
+                        className="tiny"
+                      >
+                        No payments recorded
+                        during this session.
+                      </td>
                     </tr>
-                  ))}
+
+                  ) : (
+
+                    payments.map((payment) => (
+
+                      <tr key={payment.id}>
+
+                        <td>
+                          {payment.time}
+                        </td>
+
+                        <td>
+                          {payment.type}
+                        </td>
+
+                        <td>
+                          KSh {payment.amount}
+                        </td>
+
+                        <td>
+                          <span className="tag good">
+                            {payment.status}
+                          </span>
+                        </td>
+
+                      </tr>
+
+                    ))
+                  )}
+
                 </tbody>
+
               </table>
+
             </div>
+
           </section>
         )}
 
+        {/* ==================================================
+            PRIVACY
+        ================================================== */}
+
         {section === "privacy" && (
+
           <section className="panel policy">
-            <p className="tiny">Last updated: July 2026</p>
+
+            <p className="tiny">
+              Last updated: July 2026
+            </p>
 
             <PolicySection title="1. Introduction">
-              This Privacy Policy explains how PharmaLink ("we," "us") collects, uses, and protects information
-              when patients search for medicine and when pharmacies manage their listings on the platform.
-              By using PharmaLink, you agree to the practices described below.
+              This Privacy Policy explains how
+              PharmaLink ("we," "us") collects,
+              uses, and protects information when
+              patients search for medicine and
+              when pharmacies manage their
+              listings on the platform.
             </PolicySection>
 
             <PolicySection title="2. Information We Collect">
-              <strong>Patients:</strong> we collect the medicine name and area you search for. If you reserve stock,
-              we collect your initials (not your full name), a chosen pickup window, and a system-generated
-              reservation code. We do not require an account, and we do not collect your diagnosis, national ID
-              number, or phone number.
-              <br /><br />
-              <strong>Pharmacies:</strong> we collect a pharmacy name, area, and a password (stored as a one-way
-              cryptographic hash, never in plain text) to create an account, plus the inventory data a pharmacy
-              chooses to list — medicine names, quantities, and prices.
+
+              <strong>Patients:</strong> we collect
+              the medicine name and area you search
+              for.
+
+              <br />
+              <br />
+
+              <strong>Pharmacies:</strong> we
+              collect pharmacy name, area and a
+              password. Passwords are stored as
+              cryptographic hashes rather than
+              plain text.
+
             </PolicySection>
 
             <PolicySection title="3. How We Use Information">
-              Search data is used to return live stock results and to improve coverage in underserved areas.
-              Reservation data is used only to let a pharmacy prepare an order for pickup. Pharmacy account data
-              is used for login and to attribute inventory changes to the correct pharmacy.
+              Search data is used to return live
+              stock results. Pharmacy account data
+              is used for login and inventory
+              management.
             </PolicySection>
 
-            <PolicySection title="4. What Pharmacies Can See">
-              When a patient reserves stock, the receiving pharmacy can see the reservation code, the medicine
-              and quantity requested, the requested pickup window, and the patient's initials. A pharmacy cannot
-              see a patient's search history, other pharmacies' reservations, or any pharmacy account information
-              belonging to a competitor.
+            <PolicySection title="4. Reservations">
+              Reservation information is used to
+              allow pharmacies to prepare medicine
+              for pickup.
             </PolicySection>
 
             <PolicySection title="5. Payments">
-              PharmaLink does not process, store, or have any involvement in payment between patients and
-              pharmacies — medicine is paid for directly at the pharmacy. The only charges PharmaLink processes
-              are pharmacy subscription fees and sponsored listing fees, billed to pharmacies, not patients.
-              Sponsored listings are always labelled as sponsored and never affect displayed stock accuracy.
+              Patients pay pharmacies directly.
+              PharmaLink records pharmacy
+              subscription and sponsored listing
+              charges.
             </PolicySection>
 
-            <PolicySection title="6. Data Retention">
-              Reservation records are retained only as long as needed to complete a pickup, and expired
-              reservation details may be removed after 30 days. Pharmacies may request correction or removal of
-              their own listed inventory at any time.
+            <PolicySection title="6. Security">
+              Pharmacy passwords are hashed and
+              database queries are parameterized.
             </PolicySection>
 
-            <PolicySection title="7. Your Rights">
-              Under Kenya's Data Protection Act (2019), you have the right to access, correct, or request deletion
-              of personal data we hold about you, and to lodge a complaint with the Office of the Data Protection
-              Commissioner (ODPC). Because patient searches are anonymous by default, most search activity is not
-              linked to an identifiable person in the first place.
-            </PolicySection>
-
-            <PolicySection title="8. Security">
-              Pharmacy passwords are hashed, not stored as plain text. Database queries are parameterized to
-              guard against common injection attacks. As with any online service, no method of storage or
-              transmission is 100% secure, and we work to use industry-standard safeguards appropriate to the
-              data we hold.
-            </PolicySection>
-
-            <PolicySection title="9. Changes to This Policy">
-              We may update this policy as PharmaLink's features evolve. Material changes will be reflected here
-              with an updated "last updated" date.
-            </PolicySection>
-
-            <PolicySection title="10. Contact Us">
-              Questions about this policy or your data can be sent to privacy@pharmalink.co.ke.
-            </PolicySection>
           </section>
         )}
+
       </main>
 
-      {toast && <div className="toast">{toast}</div>}
+      {toast && (
+        <div className="toast">
+          {toast}
+        </div>
+      )}
+
     </div>
   );
 }
+
+/*
+============================================================
+SMALL REUSABLE COMPONENTS
+============================================================
+*/
 
 function PolicySection({ title, children }) {
   return (
@@ -673,13 +1618,28 @@ function PolicySection({ title, children }) {
   );
 }
 
-function PaymentTile({ title, text, button, onClick }) {
+function PaymentTile({
+  title,
+  text,
+  button,
+  onClick
+}) {
   return (
     <div className="info-tile">
+
       <strong>{title}</strong>
-      <p className="tiny">{text}</p>
-      <button className="primary-btn" onClick={onClick}>{button}</button>
+
+      <p className="tiny">
+        {text}
+      </p>
+
+      <button
+        className="primary-btn"
+        onClick={onClick}
+      >
+        {button}
+      </button>
+
     </div>
   );
 }
-
